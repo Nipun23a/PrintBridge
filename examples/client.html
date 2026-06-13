@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Printbridge — test client</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 560px; margin: 40px auto; padding: 0 16px; }
+        label { display: block; margin: 12px 0 4px; font-weight: 600; }
+        input, textarea, button { width: 100%; padding: 8px; font-size: 14px; box-sizing: border-box; }
+        button { margin-top: 16px; cursor: pointer; }
+        #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 12px;
+            border-radius: 6px; margin-top: 16px; min-height: 80px; font-family: monospace; }
+        .row { display: flex; gap: 12px; }
+        .row > div { flex: 1; }
+    </style>
+</head>
+<body>
+<h1>printbridge test client</h1>
+<p>Connects to <code>ws://127.0.0.1:8181</code> and sends a raw print job to a
+    network printer on the chosen host/port.</p>
+
+<div class="row">
+    <div>
+        <label for="host">Printer host / IP</label>
+        <input id="host" value="192.168.1.50">
+    </div>
+    <div>
+        <label for="port">Port</label>
+        <input id="port" type="number" value="9100">
+    </div>
+</div>
+
+<label for="text">Text to print</label>
+<textarea id="text" rows="4">Hello from printbridge!
+Receipt line 1
+Receipt line 2</textarea>
+
+<label><input type="checkbox" id="cut" checked style="width:auto"> Initialise + feed + cut (ESC/POS)</label>
+
+<button id="send">Print</button>
+
+<div id="log">ready.</div>
+
+<script>
+    const log = (m) => { document.getElementById('log').textContent += '\n' + m; };
+
+    function buildBytes(text, cut) {
+        const enc = new TextEncoder();
+        let bytes = [];
+        if (cut) bytes.push(0x1b, 0x40);            // ESC @  -> initialise printer
+        bytes.push(...enc.encode(text + '\n'));
+        if (cut) {
+            bytes.push(0x0a, 0x0a, 0x0a);             // feed a few lines
+            bytes.push(0x1d, 0x56, 0x00);             // GS V 0 -> full cut
+        }
+        return new Uint8Array(bytes);
+    }
+
+    // base64-encode raw bytes so they survive JSON transport unharmed
+    function toB64(uint8) {
+        let s = '';
+        for (const b of uint8) s += String.fromCharCode(b);
+        return btoa(s);
+    }
+
+    document.getElementById('send').onclick = () => {
+        const host = document.getElementById('host').value.trim();
+        const port = parseInt(document.getElementById('port').value, 10);
+        const text = document.getElementById('text').value;
+        const cut  = document.getElementById('cut').checked;
+
+        log('connecting...');
+        const ws = new WebSocket('ws://127.0.0.1:8181');
+
+        ws.onopen = () => {
+            log('connected. sending job...');
+            const job = {
+                id: 'job-' + Date.now(),
+                action: 'print',
+                printer: { host, port },
+                encoding: 'base64',
+                data: toB64(buildBytes(text, cut)),
+            };
+            ws.send(JSON.stringify(job));
+        };
+
+        ws.onmessage = (e) => {
+            const reply = JSON.parse(e.data);
+            log('reply: ' + (reply.ok ? 'OK (id=' + reply.id + ')'
+                : 'ERROR: ' + reply.error));
+            ws.close();
+        };
+
+        ws.onerror = () => log('socket error — is printbridge running?');
+    };
+</script>
+</body>
+</html>
